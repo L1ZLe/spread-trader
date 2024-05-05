@@ -1,0 +1,19 @@
+{
+  "dependencies": {
+    "axios": "^1.6.8",
+    "dotenv": "^16.4.5",
+    "gate-api": "^5.60.1",
+    "perf_hooks": "^0.0.1",
+    "undici": "^6.15.0"
+  },
+  "name": "spread-trader",
+  "type": "module",
+  "version": "1.0.0",
+  "main": "test.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "description": ""
+}
