@@ -1,33 +1,27 @@
 import GateApi from "gate-api"
-import fs from "fs"
 import "dotenv/config"
 import axios from "axios"
 import crypto from "crypto"
-
-const API_KEY = process.env.GATEIO_ApiKey
-const API_SECRET = process.env.GATEIO_SecretKey
+import { getTopLowLiquidityCoins } from "./getCoins.js"
+import fs from "fs"
+import { parse, stringify } from "flatted"
 
 const client = new GateApi.ApiClient()
 const opts = {
   account: "spot",
 }
-// Uncomment the next line to change base path
-// client.basePath = "https://some-other-host"
 
-// Configure Gate APIv4 key authentication
 client.setApiKeySecret(process.env.GATEIO_ApiKey, process.env.GATEIO_SecretKey)
 
-const api = new GateApi.AccountApi(client)
-
 async function getBidPrice(pair) {
-  const GATE_API_URL = `https://api.gate.io/api2/1/ticker/${pair}`
+  const GATE_API_URL = `https://data.gateapi.io/api2/1/ticker/${pair}`
   const response = await axios.get(GATE_API_URL)
   const { highestBid } = response.data
   return highestBid
 }
 
 async function getAskPrice(pair) {
-  const GATE_API_URL = `https://api.gate.io/api2/1/ticker/${pair}`
+  const GATE_API_URL = `https://data.gateapi.io/api2/1/ticker/${pair}`
   const response = await axios.get(GATE_API_URL)
   const { lowestAsk } = response.data
   return lowestAsk
@@ -42,7 +36,7 @@ async function placeBuyOrder(pair, amount, price) {
     price,
     amount: amount,
   })
-  console.log("Buy order placed at the highest bid price")
+  console.log("Buy order placed at the highest bid price for", pair)
   return order
 }
 
@@ -57,7 +51,7 @@ async function placeSellOrder(pair, amount, price) {
     price,
     amount: amount,
   })
-  console.log("Sell order placed at the lowest ask price")
+  console.log("Sell order placed at the lowest ask price for", pair)
   return order
 }
 
@@ -106,31 +100,13 @@ async function getOrderStatus(orderId, currencyPair) {
   }
 }
 
-async function automateTrading() {
-  const tradingPairs = JSON.parse(fs.readFileSync("topCoins.json"))
-  const pair = tradingPairs[tradingPairs.length - 9] // Select the first pair
-  console.log("Selected pair:", pair)
-
-  let newPrice = await getBidPrice(pair)
-  let buyOrder = await placeBuyOrder(pair, 4 / newPrice, newPrice * 1.001)
-  buyOrder = buyOrder.response
-
-  let orderId = buyOrder.data.id
-
-  while ((await getOrderStatus(orderId, pair)) !== "closed") {
-    newPrice = await getBidPrice(pair)
-    if (newPrice > buyOrder.data.price) {
-      buyOrder = await modifyOrder(pair, orderId, newPrice * 1.001)
-      console.log("Modified the BID price to:", buyOrder.data.price)
-    }
-  }
-
-  console.log(
-    "**********************************************************************"
-  )
-
-  newPrice = await getAskPrice(pair)
+async function sellFunction(pair, buyOrder) {
+  let newPrice
   let amountBought = buyOrder.data.amount
+  do {
+    newPrice = await getAskPrice(pair)
+  } while (newPrice <= buyOrder.data.price)
+
   let sellOrder = await placeSellOrder(
     pair,
     amountBought - amountBought * 0.001,
@@ -138,21 +114,91 @@ async function automateTrading() {
   )
 
   sellOrder = sellOrder.response
-  orderId = sellOrder.data.id
+
+  let orderId = sellOrder.data.id
+  console.log(
+    `the ask price was: ${newPrice} and the price i sold at is: ${sellOrder.data.price}`
+  )
 
   while ((await getOrderStatus(orderId, pair)) !== "closed") {
-    console.log("entered sell")
-    newPrice = await getAskPrice(pair)
+    do {
+      newPrice = await getAskPrice(pair)
+    } while (newPrice <= buyOrder.data.price)
     if (newPrice < sellOrder.data.price) {
-      sellOrder = await modifyOrder(pair, orderId, newPrice * 0.099)
-      console.log("Modified the ASK price to:", sellOrder.data.price)
+      sellOrder = await modifyOrder(pair, orderId, newPrice * 0.999)
     }
   }
-  console.log(
-    `Finished with ${pair} and profit is ${
-      (sellOrder.data.price - buyOrder.data.price) * amountBought
-    }$`
-  )
+
+  return sellOrder, amountBought
+}
+async function automateTrading(pair) {
+  try {
+    const tradesize = 3.5
+    console.log("Selected pair:", pair)
+
+    let newPrice = await getBidPrice(pair)
+    let buyOrder = await placeBuyOrder(
+      pair,
+      tradesize / newPrice,
+      newPrice * 1.001
+    )
+    buyOrder = buyOrder.response
+
+    let orderId = buyOrder.data.id
+
+    while ((await getOrderStatus(orderId, pair)) !== "closed") {
+      newPrice = await getBidPrice(pair)
+      if (newPrice > buyOrder.data.price) {
+        buyOrder = await modifyOrder(pair, orderId, newPrice * 1.001)
+      }
+    }
+    const fileName = `BuyOrders/${pair}.json`
+    fs.writeFileSync(fileName, stringify(buyOrder), (err) => {
+      if (err) {
+        console.log(`Error writing to file ${fileName}:`, err)
+      } else {
+        console.log(`Wrote buy order to file ${fileName}`)
+      }
+    })
+    console.log(
+      "**********************************************************************"
+    )
+
+    let { sellOrder, amountBought } = await sellFunction(pair, buyOrder)
+
+    let profit =
+      ((sellOrder.data.price - buyOrder.data.price) * amountBought) / 1.004
+    console.log(`Finished with ${pair} and profit is ${profit}$`)
+    if (profit > 0) {
+      // clear vaiarbles bellow:
+      newPrice = null
+      amountBought = null
+      orderId = null
+      buyOrder = null
+      sellOrder = null
+      profit = null
+      automateTrading(pair)
+    } else {
+      main(1)
+    }
+  } catch (error) {
+    console.error(`Error with pair ${pair}:`, error.message)
+  }
 }
 
-automateTrading()
+async function main(numberOfPairs) {
+  try {
+    const tradingPairs = await getTopLowLiquidityCoins()
+
+    for (
+      let i = tradingPairs.length - 1;
+      i >= tradingPairs.length - numberOfPairs;
+      i--
+    ) {
+      automateTrading(tradingPairs[i])
+    }
+  } catch (error) {
+    console.error("Error in main function:", error.message)
+  }
+}
+main(5)
