@@ -133,7 +133,8 @@ async function sellFunction(pair, buyOrder) {
 }
 async function automateTrading(pair) {
   try {
-    const tradesize = 3.5
+    const tradesize = 3.5 // This is the amount of $ you want to buy for each trade
+
     console.log("Selected pair:", pair)
 
     let newPrice = await getBidPrice(pair)
@@ -169,7 +170,10 @@ async function automateTrading(pair) {
     let profit =
       ((sellOrder.data.price - buyOrder.data.price) * amountBought) / 1.004
     console.log(`Finished with ${pair} and profit is ${profit}$`)
-    if (profit > 0) {
+    const askPrice = await getAskPrice(pair)
+    const bidPrice = await getBidPrice(pair)
+    const spread = (askPrice - bidPrice) / bidPrice
+    if (profit > 0 && spread > 0.07) {
       // clear vaiarbles bellow:
       newPrice = null
       amountBought = null
@@ -201,4 +205,4 @@ async function main(numberOfPairs) {
     console.error("Error in main function:", error.message)
   }
 }
-main(5)
+main(10)
